@@ -6,6 +6,7 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+// Configuración de conexión profesional para TiDB Cloud
 const dbConfig = {
   host: process.env.DB_HOST,
   port: parseInt(process.env.DB_PORT || "4000"),
@@ -23,43 +24,59 @@ async function getPool() {
   return pool;
 }
 
-// Ruta de salud y creación de tablas
+// Inicialización: Crea las tablas si no existen al verificar la conexión
 app.get("/api/health", async (req, res) => {
   try {
     const db = await getPool();
-    // Intenta crear la tabla de conceptos por si acaso
-    await db.execute(`
-      CREATE TABLE IF NOT EXISTS conceptos (
-        id INT AUTO_INCREMENT PRIMARY KEY,
-        nombre VARCHAR(100) NOT NULL,
-        descripcion TEXT
-      )
-    `);
-    res.json({ status: "ok", message: "Conectado a TiDB y tablas listas" });
+    // Crear tablas una por una
+    await db.execute("CREATE TABLE IF NOT EXISTS conceptos (id INT AUTO_INCREMENT PRIMARY KEY, nombre VARCHAR(100), descripcion TEXT)");
+    await db.execute("CREATE TABLE IF NOT EXISTS destinos (id INT AUTO_INCREMENT PRIMARY KEY, nombre VARCHAR(100), responsable VARCHAR(100))");
+    await db.execute("CREATE TABLE IF NOT EXISTS productos (id INT AUTO_INCREMENT PRIMARY KEY, nombre VARCHAR(100), precio DECIMAL(10,2))");
+    await db.execute("CREATE TABLE IF NOT EXISTS unidades (id INT AUTO_INCREMENT PRIMARY KEY, nombre VARCHAR(100), abreviatura VARCHAR(10))");
+    
+    res.json({ status: "ok", message: "Tablas verificadas y BD conectada" });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-app.get("/api/conceptos", async (req, res) => {
-  try {
-    const db = await getPool();
-    const [rows] = await db.execute("SELECT * FROM conceptos ORDER BY id DESC");
-    res.json(rows);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
+// FUNCIÓN GENÉRICA PARA CRUD (Ahorra mucho código)
+const createCRUDRoutes = (route, table, columns) => {
+  // Obtener todos
+  app.get(`/api/${route}`, async (req, res) => {
+    try {
+      const db = await getPool();
+      const [rows] = await db.execute(`SELECT * FROM ${table} ORDER BY id DESC`);
+      res.json(rows);
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
 
-app.post("/api/conceptos", async (req, res) => {
-  const { nombre, descripcion } = req.body;
-  try {
-    const db = await getPool();
-    await db.execute("INSERT INTO conceptos (nombre, descripcion) VALUES (?, ?)", [nombre, descripcion]);
-    res.json({ mensaje: "Guardado" });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
+  // Insertar uno
+  app.post(`/api/${route}`, async (req, res) => {
+    try {
+      const db = await getPool();
+      const fields = columns.join(", ");
+      const values = columns.map(c => req.body[c]);
+      const placeholders = columns.map(() => "?").join(", ");
+      await db.execute(`INSERT INTO ${table} (${fields}) VALUES (${placeholders})`, values);
+      res.json({ mensaje: "Guardado correctamente" });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
+  // Eliminar uno
+  app.delete(`/api/${route}/:id`, async (req, res) => {
+    try {
+      const db = await getPool();
+      await db.execute(`DELETE FROM ${table} WHERE id = ?`, [req.params.id]);
+      res.json({ mensaje: "Eliminado" });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+};
+
+// Configurar las rutas para cada catálogo
+createCRUDRoutes("conceptos", "conceptos", ["nombre", "descripcion"]);
+createCRUDRoutes("destinos", "destinos", ["nombre", "responsable"]);
+createCRUDRoutes("productos", "productos", ["nombre", "precio"]);
+createCRUDRoutes("unidades", "unidades", ["nombre", "abreviatura"]);
 
 module.exports = app;
